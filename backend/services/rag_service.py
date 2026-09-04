@@ -1,20 +1,113 @@
-from langchain_huggingface import HuggingFaceEmbeddings
+# Hugging Face/Sentence Transformers are imported lazily only when explicitly enabled.
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-import json
 
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+import json
+import os
+
+
+# =========================================================
+# EMBEDDING CONFIGURATION
+# =========================================================
+# Render's free instance has limited RAM. Sentence Transformers
+# can load PyTorch and exceed the memory limit at startup.
+#
+# Local development can still use Hugging Face embeddings by
+# setting:
+#     USE_HF_EMBEDDINGS=true
+#
+# Deployment defaults to a lightweight TF-IDF + FAISS index.
+USE_HF_EMBEDDINGS = os.getenv("USE_HF_EMBEDDINGS", "false").lower() == "true"
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
+_embeddings = None
+
+
+def get_embeddings():
+    """Load Hugging Face embeddings only when explicitly enabled."""
+    global _embeddings
+
+    if _embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=MODEL_NAME,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
+        )
+
+    return _embeddings
+
 
 # =========================================================
-# HUGGING FACE EMBEDDING MODEL
+# LIGHTWEIGHT FAISS VECTOR STORE
 # =========================================================
 
-embeddings = HuggingFaceEmbeddings(
-    model_name=MODEL_NAME
-)
+class LightweightFAISSStore:
+    """
+    Memory-friendly vector store for Render's free instance.
+
+    It uses TF-IDF vectors for retrieval and stores them in a
+    FAISS IndexFlatIP index. This keeps the RAG + FAISS flow
+    without loading PyTorch/Sentence Transformers.
+    """
+
+    def __init__(self, documents):
+        if not documents:
+            raise ValueError("Documents cannot be empty")
+
+        self.documents = documents
+
+        texts = [doc.page_content for doc in documents]
+
+        self.vectorizer = TfidfVectorizer(
+            lowercase=True,
+            stop_words="english",
+            ngram_range=(1, 2),
+            max_features=5000,
+        )
+
+        matrix = self.vectorizer.fit_transform(texts).astype(np.float32)
+
+        # Import FAISS only when this lightweight store is used.
+        import faiss
+
+        dense_matrix = matrix.toarray()
+
+        # Normalize for cosine-similarity-like inner product.
+        norms = np.linalg.norm(dense_matrix, axis=1, keepdims=True)
+        dense_matrix = dense_matrix / np.maximum(norms, 1e-12)
+
+        self.index = faiss.IndexFlatIP(dense_matrix.shape[1])
+        self.index.add(dense_matrix)
+
+    def similarity_search(self, question, k=4):
+        if not question or not question.strip():
+            return []
+
+        query_matrix = self.vectorizer.transform(
+            [question]
+        ).astype(np.float32)
+
+        query_vector = query_matrix.toarray()
+
+        norm = np.linalg.norm(query_vector, axis=1, keepdims=True)
+        query_vector = query_vector / np.maximum(norm, 1e-12)
+
+        k = min(k, len(self.documents))
+
+        _, indices = self.index.search(query_vector, k)
+
+        return [
+            self.documents[i]
+            for i in indices[0]
+            if i >= 0
+        ]
 
 
 # =========================================================
@@ -38,7 +131,7 @@ def split_text(text: str):
 
 
 # =========================================================
-# CREATE FAISS VECTOR STORE
+# CREATE VECTOR STORE
 # =========================================================
 
 def create_vector_store(text: str):
@@ -47,12 +140,15 @@ def create_vector_store(text: str):
 
     documents = split_text(text)
 
-    vector_store = FAISS.from_documents(
-        documents,
-        embeddings
-    )
+    # Local option: original Hugging Face + LangChain FAISS.
+    if USE_HF_EMBEDDINGS:
+        return FAISS.from_documents(
+            documents,
+            get_embeddings()
+        )
 
-    return vector_store
+    # Deployment-safe option.
+    return LightweightFAISSStore(documents)
 
 
 # =========================================================
@@ -64,12 +160,10 @@ def search_relevant_context(
     question: str,
     k: int = 4
 ):
-    documents = vector_store.similarity_search(
+    return vector_store.similarity_search(
         question,
         k=k
     )
-
-    return documents
 
 
 # =========================================================
@@ -125,27 +219,15 @@ def generate_rag_answer(
     preparation: dict,
     gemini_client
 ):
-    # -------------------------------------
-    # Build complete knowledge base
-    # -------------------------------------
-
     knowledge_base = build_knowledge_base(
         resume_text,
         job_description_text,
         preparation
     )
 
-    # -------------------------------------
-    # Create FAISS vector database
-    # -------------------------------------
-
     vector_store = create_vector_store(
         knowledge_base
     )
-
-    # -------------------------------------
-    # Retrieve relevant chunks
-    # -------------------------------------
 
     documents = search_relevant_context(
         vector_store,
@@ -154,10 +236,6 @@ def generate_rag_answer(
     )
 
     context = get_context_text(documents)
-
-    # -------------------------------------
-    # LangChain Prompt Template
-    # -------------------------------------
 
     template = """
 You are an AI Interview Preparation Assistant.
@@ -182,34 +260,21 @@ Instructions:
 5. Never invent resume information.
 6. If information is missing, honestly mention it.
 7. Focus on interview preparation only.
-
-Return a natural helpful answer.
 """
 
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=[
-            "context",
-            "question"
-        ]
+    prompt_template = PromptTemplate(
+        input_variables=["context", "question"],
+        template=template
     )
 
-    formatted_prompt = prompt.format(
+    final_prompt = prompt_template.format(
         context=context,
         question=question
     )
 
-    # -------------------------------------
-    # Gemini Generation
-    # -------------------------------------
-
     response = gemini_client.models.generate_content(
         model="gemini-3.1-flash-lite",
-        contents=formatted_prompt
+        contents=final_prompt
     )
 
-    return {
-        "answer": response.text.strip(),
-        "retrieved_context": context,
-        "chunks_found": len(documents)
-    }
+    return response.text

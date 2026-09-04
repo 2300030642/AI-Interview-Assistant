@@ -3,9 +3,9 @@ uvicorn
 python-multipart
 python-dotenv
 google-genai
-
 langchain
 langchain-community
 langchain-huggingface
 faiss-cpu
 sentence-transformers
+scikit-learn
