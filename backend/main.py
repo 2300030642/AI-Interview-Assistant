@@ -389,7 +389,7 @@ async def ai_chat(request: AIChatRequest):
         )
 
         return {
-            "answer": result["answer"]
+            "answer": result
         }
 
     except Exception as error:
