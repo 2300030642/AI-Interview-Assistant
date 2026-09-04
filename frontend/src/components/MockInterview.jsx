@@ -651,7 +651,7 @@ const stopSpeechRecognition = () => {
       // the next click creates the final report locally.
       if (currentQuestion + 1 >= MAX_QUESTIONS) {
         const response = await fetch(
-          "http://127.0.0.1:8000/mock-interview/evaluate",
+          "https://ai-interview-assistant-o86b.onrender.com/mock-interview/evaluate",
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -709,7 +709,7 @@ const stopSpeechRecognition = () => {
       // This avoids the /mock-interview/continue 404 problem.
 
       const evaluationResponse = await fetch(
-        "http://127.0.0.1:8000/mock-interview/evaluate",
+        "https://ai-interview-assistant-o86b.onrender.com/mock-interview/evaluate",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -749,7 +749,7 @@ const stopSpeechRecognition = () => {
       };
 
       const nextResponse = await fetch(
-        "http://127.0.0.1:8000/mock-interview/next",
+        "https://ai-interview-assistant-o86b.onrender.com/mock-interview/next",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

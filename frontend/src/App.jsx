@@ -77,7 +77,7 @@ const sendChatMessage = async () => {
   try {
 
   const response = await axios.post(
-    "http://127.0.0.1:8000/ai-chat",
+    "https://ai-interview-assistant-o86b.onrender.com/ai-chat",
     {
       question: userMessage,
       resume_text: resumeText,
@@ -133,7 +133,7 @@ const sendChatMessage = async () => {
     formData.append("job_description", jobDescription);
 
     const response = await axios.post(
-      "http://127.0.0.1:8000/prepare-interview",
+      "https://ai-interview-assistant-o86b.onrender.com/prepare-interview",
       formData
     );
 
@@ -187,7 +187,7 @@ const startRagMockInterview = async () => {
 
   try {
     const response = await axios.post(
-      "http://127.0.0.1:8000/mock-interview/start",
+      "https://ai-interview-assistant-o86b.onrender.com/mock-interview/start",
       {
         preparation: preparation,
         resume_text: resumeText,
